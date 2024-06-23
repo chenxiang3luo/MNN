@@ -41,9 +41,9 @@ ClassDataLoader::ClassDataLoader(std::shared_ptr<BatchDataset> dataset, std::sha
     }
 }
 
-std::vector<Example> ClassDataLoader::next() {
+std::vector<Example> ClassDataLoader::next(size_t  batchSize) {
     if (mConfig->numWorkers == 0) {
-        auto batchIndices = mSampler->next(mConfig->batchSize);
+        auto batchIndices = mSampler->next(batchSize);
         MNN_ASSERT(batchIndices.size() != 0); // the sampler is exhausted, should reset the data loader
         if (mConfig->dropLast && batchIndices.size() < mConfig->batchSize) {
             MNN_ASSERT(false); // the sampler is exhausted

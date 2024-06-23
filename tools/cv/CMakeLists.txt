@@ -10,7 +10,7 @@ IF(MNN_BUILD_OPENCV)
   # imgproc submodules end
   option(MNN_CVCORE "Enable cv core" ON)
   option(MNN_CALIB3D "Enable calib3d" ON)
-  option(MNN_IMGCODECS "Enable imgcodecs" OFF)
+  option(MNN_IMGCODECS "Enable imgcodecs" On)
   option(MNN_OPENCV_TEST "Enable opencv test" OFF)
   option(MNN_OPENCV_BENCH "Enable opencv benchmark" OFF)
 

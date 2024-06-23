@@ -43,7 +43,7 @@ public:
 
     void join();
 
-    std::vector<Example> next();
+    std::vector<Example> next(size_t batchSize);
 
     void reset(uint8_t c);
     void select_class(uint8_t c);

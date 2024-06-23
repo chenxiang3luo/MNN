@@ -1,5 +1,5 @@
 option(MNN_TRAIN_DEBUG "Enable MNN Train Grad Debug" OFF)
-option(MNN_USE_OPENCV "Use opencv" OFF)
+option(MNN_USE_OPENCV "Use opencv" ON)
 
 include_directories(${CMAKE_CURRENT_LIST_DIR}/source/grad)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/source/optimizer)

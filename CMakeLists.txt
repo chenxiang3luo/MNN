@@ -56,7 +56,7 @@ option(MNN_USE_SSE "Use SSE optimization for x86 if possiable" ON)
 option(MNN_BUILD_CODEGEN "Build with codegen" OFF)
 option(MNN_ENABLE_COVERAGE "Build with coverage enable" OFF)
 option(MNN_BUILD_PROTOBUFFER "Build with protobuffer in MNN" ON)
-option(MNN_BUILD_OPENCV "Build OpenCV api in MNN." OFF)
+option(MNN_BUILD_OPENCV "Build OpenCV api in MNN." ON)
 option(MNN_BUILD_LLM "Build llm library based MNN." OFF)
 option(MNN_BUILD_DIFFUSION "Build diffusion demo based MNN." OFF)
 option(MNN_INTERNAL "Build with MNN internal features, such as model authentication, metrics logging" OFF)
@@ -350,6 +350,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include/
                     ${CMAKE_CURRENT_LIST_DIR}/source/
                     ${CMAKE_CURRENT_LIST_DIR}/express/
                     ${CMAKE_CURRENT_LIST_DIR}/tools/
+                    ${CMAKE_CURRENT_LIST_DIR}/tools/cv/include
                     ${CMAKE_CURRENT_LIST_DIR}/codegen/
                     ${CMAKE_CURRENT_LIST_DIR}/schema/current/
                     ${CMAKE_CURRENT_LIST_DIR}/3rd_party/

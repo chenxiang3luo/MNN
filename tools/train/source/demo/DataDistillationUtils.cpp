@@ -18,6 +18,7 @@
 #include "DemoUnit.hpp"
 #include "NN.hpp"
 #include "SGD.hpp"
+#include <opencv2/opencv.hpp>
 #include <memory>
 #define MNN_OPEN_TIME_TRACE
 #include <MNN/AutoTime.hpp>
@@ -34,6 +35,7 @@
 using namespace MNN;
 using namespace MNN::Express;
 using namespace MNN::Train;
+using namespace MNN::CV;
 
 void printVector(const std::vector<int>& vec) {
     for (int i = 0; i < vec.size(); ++i) {
@@ -42,38 +44,74 @@ void printVector(const std::vector<int>& vec) {
     std::cout << std::endl;
 }
 
+cv::Mat varpToMat(VARP var) {
+    // Assume var is already in NHWC format
+    var = _Squeeze(var,{0});
+    auto info = var->getInfo();
+    auto ptr = var->readMap<float>();
+    printVector(info->dim);
+    int height = info->dim[0];
+    int width = info->dim[1];
+    int channels = info->dim[2];
+
+    cv::Mat mat(height, width, CV_32FC(channels), const_cast<float*>(ptr));
+
+    // Normalize to 0-255 and convert to 8-bit unsigned
+    cv::Mat norm_mat;
+    cv::normalize(mat, norm_mat, 0, 255, cv::NORM_MINMAX);
+    norm_mat.convertTo(norm_mat, CV_8UC(channels));
+
+    return norm_mat;
+}
+
+void save_picture(VARP var, bool is_batch,bool is_init) {
+    // Assume the data is in NHWC format
+    var = _Convert(var, NHWC);
+    auto info = var->getInfo();
+    int batch_size = info->dim[0];
+    INTS split_size = {1,1,1,1,1,1,1,1,1,1};
+    auto var_single = _Split(var, split_size, 0);
+    if (is_batch) {
+        for (int i = 0; i < batch_size; ++i) {
+            std::string filename;
+            if (is_init){
+                filename = "vapr_init_" + std::to_string(i) + ".png";
+            } else{
+                filename = "vapr_syn_" + std::to_string(i) + ".png";
+            }
+            cv::Mat mat = varpToMat(var_single[i]);
+            
+            cv::imwrite(filename, mat);
+            std::cout << "Saved " << filename << std::endl;
+        }
+    } else {
+        cv::Mat mat = varpToMat(var);
+        cv::imwrite("vapr_output.png", mat);
+        std::cout << "Saved vapr_output.png" << std::endl;
+    }
+}
+
+
+
 void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2NoBN> model, const int numClasses, const int addToLabel,
                                 std::string root, const int quantBits) {
     auto exe = Executor::getGlobalExecutor();
     BackendConfig config;
     exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
-    std::vector<int> shapeValue = {10,1,28,28};
-    
-    VARP random_shape = _Const(shapeValue.data(), {4}, NHWC, halide_type_of<int>());
-    VARPS syn_inputs;
-    for (int c = 0; c < numClasses; c++){
-        auto syn_input = _RandomUnifom(random_shape, halide_type_of<float>(),0.0f, 1.0f,c,c);
-        syn_input.fix(VARP::TRAINABLE);
-        // syn_input->getTensor()->print();
-        syn_inputs.push_back(syn_input);
-        // std::cout<<syn_inputs.size()<<std::endl;
-    }
-    std::cout << " syn " << syn_inputs.size() << std::endl;
-    std::shared_ptr<Module> _input(Module::createEmpty(syn_inputs));
 
-    std::shared_ptr<SGD> solver(new SGD(_input));
-    solver->setMomentum(0.5f);
-    solver->setLearningRate(1.f);
+
+
+
+    
     // solver->setMomentum2(0.99f);
     // solver->setWeightDecay(0.00004f);
 
     auto dataset = MnistDataset::create(root, MnistDataset::Mode::TRAIN);
     size_t dataset_size = dataset.mDataset->size();
     std::cout << " dataset_size " << dataset_size << std::endl;
-    
-    // the stack transform, stack [1, 28, 28] to [n, 1, 28, 28]
-    const size_t batchSize  = 64;
+    const size_t batchSize  = 128;
     const size_t numWorkers = 0;
+    const int ipc = 10;
     bool shuffle            = true;
 
     
@@ -96,6 +134,45 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
     
     // dataset.mDataset,batchSize,indices_class, true, shuffle, numWorkers
     auto trainDataLoader = std::shared_ptr<ClassDataLoader>(ClassDataLoader::makeDataLoader(dataset.mDataset,batchSize,indices_class,true,shuffle,numWorkers));
+    std::vector<int> shapeValue = {10,1,28,28};
+    
+    VARP random_shape = _Const(shapeValue.data(), {4}, NHWC, halide_type_of<int>());
+    VARPS syn_inputs;
+    auto init_method = "random";
+    if(init_method == "random"){
+        for (int c = 0; c < numClasses; c++){
+            auto syn_input = _RandomUnifom(random_shape, halide_type_of<float>(),0.0f, 1.0f,c,c);
+            syn_input.fix(VARP::TRAINABLE);
+            // syn_input->getTensor()->print();
+            syn_inputs.push_back(syn_input);
+            // std::cout<<syn_inputs.size()<<std::endl;
+        }
+    }else if (init_method == "real")
+    {
+        for (int c = 0; c < numClasses; c++){
+            trainDataLoader->select_class(c);
+            auto example  = trainDataLoader->next(ipc)[0];
+            auto tpm = _Cast<float>(example.first[0]) * _Const(1.0f / 255.0f);
+            auto syn_input = _Cast<float>(tpm);
+            syn_input.fix(VARP::TRAINABLE);
+            // syn_input->getTensor()->print();
+            syn_inputs.push_back(syn_input);
+            // std::cout<<syn_inputs.size()<<std::endl;
+        }
+        
+        
+    }else{
+        printf("unsopported init methods");
+    }
+    // save_picture(syn_inputs[0],true,true);
+    std::cout << " syn " << syn_inputs.size() << std::endl;
+    std::shared_ptr<Module> _input(Module::createEmpty(syn_inputs));
+
+    std::shared_ptr<SGD> solver(new SGD(_input));
+    solver->setMomentum(0.5f);
+    solver->setLearningRate(1.f);
+    // the stack transform, stack [1, 28, 28] to [n, 1, 28, 28]
+    
 
     size_t trainIterations = 1000;
     // size_t trainIterations = trainDataLoader->iterNumber();
@@ -124,7 +201,7 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
                 for (uint8_t c = 0; c < numClasses; c++){
                     
                     trainDataLoader->select_class(c);
-                    auto example  = trainDataLoader->next()[0];
+                    auto example  = trainDataLoader->next(batchSize)[0];
                     auto syn_input = syn_inputs[c];
                     // std::cout << " 2" << std::endl;
                     // std::cout <<example.first[0]->getInfo()->order<<std::endl;
@@ -132,7 +209,7 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
                     // std::cout <<syn_input->getInfo()->order<<std::endl;
                     auto cast1      = _Cast<float>(example.first[0]);
                     example.first[0] = cast1 * _Const(1.0f / 255.0f);
-                    syn_input = syn_input * _Const(1.0f / 255.0f);
+                    // syn_input = syn_input * _Const(1.0f / 255.0f);
                     auto real_feature = model->embedding(_Convert(example.first[0], NC4HW4));
                     auto syn_feature = model->embedding(_Convert(syn_input, NC4HW4));
                     // auto loss    = _CrossEntropy(predict, newTarget);
@@ -151,12 +228,16 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
                     // std::cout << " lr: " << rate << std::endl;
                 }
                 solver->step(loss);
-
+                // std::cout << "order " << syn_inputs[0]->getInfo()->order<< std::endl;
                 //test
+            
                 
+                // imwrite(image_name,syn_inputs[0]);
             }
+            save_picture(syn_inputs[0],true,false);
+            
         }
-
+        // syn_inputs[0]->imwrite;
         // int correct = 0;
         // int sampleCount = 0;
         // testDataLoader->reset();
