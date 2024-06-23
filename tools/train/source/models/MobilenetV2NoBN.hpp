@@ -1,30 +1,32 @@
 //
-//  MobilenetV2.hpp
+//  MobilenetV2NoBN.hpp
 //  MNN
 //
 //  Created by MNN on 2020/01/08.
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
-#ifndef MobilenetV2_hpp
-#define MobilenetV2_hpp
+#ifndef MobilenetV2NoBN_hpp
+#define MobilenetV2NoBN_hpp
 
 #include "Initializer.hpp"
 #include <vector>
-#include "ModelUtils.hpp"
+#include "ModelUtilsNoBN.hpp"
 #include <MNN/expr/Module.hpp>
 #include "NN.hpp"
 #include <algorithm>
+
+#include "ModelUtils.hpp"  // for makeDivisible
 
 namespace MNN {
 namespace Train {
 namespace Model {
 using namespace Express;
-class MNN_PUBLIC MobilenetV2 : public Express::Module {
+class MNN_PUBLIC MobilenetV2NoBN : public Express::Module {
 public:
     // use tensorflow numClasses = 1001, which label 0 means outlier of the original 1000 classes
     // so you maybe need to add 1 to your true labels, if you are testing with ImageNet dataset
-    MobilenetV2(int numClasses = 1001, float widthMult = 1.0f, int divisor = 8);
+    MobilenetV2NoBN(int numClasses = 1001, float widthMult = 1.0f, int divisor = 8);
 
     virtual std::vector<Express::VARP> onForward(const std::vector<Express::VARP> &inputs) override;
     std::vector<Express::VARP> onEmbedding(const std::vector<Express::VARP> &inputs);
@@ -41,4 +43,4 @@ public:
 } // namespace Train
 } // namespace MNN
 
-#endif // MobilenetV2_hpp
+#endif // MobilenetV2NoBN_hpp

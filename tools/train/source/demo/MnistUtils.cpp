@@ -80,7 +80,6 @@ void MnistUtils::train(std::shared_ptr<Module> model, std::string root) {
                 auto cast       = _Cast<float>(example.first[0]);
                 example.first[0] = cast * _Const(1.0f / 255.0f);
                 moveBatchSize += example.first[0]->getInfo()->dim[0];
-
                 // Compute One-Hot
                 auto newTarget = _OneHot(_Cast<int32_t>(example.second[0]), _Scalar<int>(10), _Scalar<float>(1.0f),
                                          _Scalar<float>(0.0f));

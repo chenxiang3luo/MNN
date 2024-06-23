@@ -10,7 +10,7 @@
 #define MobilenetV1_hpp
 
 #include <vector>
-#include "MobilenetUtils.hpp"
+#include "ModelUtils.hpp"
 #include <MNN/expr/Module.hpp>
 #include "NN.hpp"
 

@@ -1,22 +1,22 @@
 //
-//  MobilenetV2.cpp
+//  MobilenetV2NoBN.cpp
 //  MNN
 //
 //  Created by MNN on 2020/01/08.
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
-#ifndef MobilenetV2_cpp
-#define MobilenetV2_cpp
+#ifndef MobilenetV2NoBN_cpp
+#define MobilenetV2NoBN_cpp
 
 #include <algorithm>
-#include "MobilenetV2.hpp"
-
+#include "MobilenetV2NoBN.hpp"
+#include <iostream>
 namespace MNN {
 namespace Train {
 namespace Model {
 using namespace MNN::Express;
 
-MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
+MobilenetV2NoBN::MobilenetV2NoBN(int numClasses, float widthMult, int divisor) {
     int inputChannels = 32;
     int lastChannels  = 1280;
 
@@ -32,7 +32,7 @@ MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
     inputChannels = makeDivisible(inputChannels * widthMult, divisor);
     lastChannels  = makeDivisible(lastChannels * std::max(1.0f, widthMult), divisor);
 
-    firstConv = ConvBnRelu({3, inputChannels}, 3, 2);
+    firstConv = ConvBnReluNoBN({3, inputChannels}, 3, 2);
 
     for (int i = 0; i < invertedResidualSetting.size(); i++) {
         std::vector<int> setting = invertedResidualSetting[i];
@@ -49,12 +49,12 @@ MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
                 stride = s;
             }
 
-            bottleNeckBlocks.emplace_back(BottleNeck({inputChannels, outputChannels}, stride, t));
+            bottleNeckBlocks.emplace_back(BottleNeckNoBN({inputChannels, outputChannels}, stride, t));
             inputChannels = outputChannels;
         }
     }
 
-    lastConv = ConvBnRelu({inputChannels, lastChannels}, 1);
+    lastConv = ConvBnReluNoBN({inputChannels, lastChannels}, 1);
 
     dropout.reset(NN::Dropout(0.1));
     fc.reset(NN::Linear(lastChannels, numClasses, true, std::shared_ptr<Initializer>(Initializer::MSRA())));
@@ -69,10 +69,10 @@ MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
 
     registerModel({firstConv, lastConv, dropout, fc, conv_ap});
     registerModel(bottleNeckBlocks);
-    setName("MobilenetV2");
+    setName("MobilenetV2NoBN");
 }
 
-std::vector<Express::VARP> MobilenetV2::onForward(const std::vector<Express::VARP> &inputs) {
+std::vector<Express::VARP> MobilenetV2NoBN::onForward(const std::vector<Express::VARP> &inputs) {
     using namespace Express;
     VARP x = inputs[0];
 
@@ -98,7 +98,7 @@ std::vector<Express::VARP> MobilenetV2::onForward(const std::vector<Express::VAR
     return {x};
 }
 
-std::vector<Express::VARP> MobilenetV2::onEmbedding(const std::vector<Express::VARP> &inputs) {
+std::vector<Express::VARP> MobilenetV2NoBN::onEmbedding(const std::vector<Express::VARP> &inputs) {
     using namespace Express;
     VARP x = inputs[0];
 
@@ -116,14 +116,14 @@ std::vector<Express::VARP> MobilenetV2::onEmbedding(const std::vector<Express::V
 
     x = _Convert(x, NCHW);
     x = _Reshape(x, {0, -1});
-
+    
     return {x};
 }
 
-
-Express::VARP MobilenetV2::embedding(Express::VARP input) {
+Express::VARP MobilenetV2NoBN::embedding(Express::VARP input) {
     return this->onEmbedding({input})[0];
 }
+
 } // namespace Model
 } // namespace Train
 } // namespace MNN
