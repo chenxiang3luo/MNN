@@ -5,7 +5,7 @@
 //  Created by MNN on 2020/01/08.
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
-
+// cd .. && cd build/ && ./runTrainDemo.out DataDistillationTrain /root/datasets/Mnist
 #include "DataDistillationUtils.hpp"
 #include <MNN/expr/Executor.hpp>
 #include <MNN/expr/Optimizer.hpp>
@@ -31,25 +31,23 @@
 #include "Transformer.hpp"
 #include "ImageDataset.hpp"
 #include "module/PipelineModule.hpp"
+#include "MobilenetV2NoBN.hpp"
+#include "ConvNet.hpp"
+
+
 #include <random>
 using namespace MNN;
 using namespace MNN::Express;
 using namespace MNN::Train;
 using namespace MNN::CV;
+using namespace MNN::Train::Model;
 
-void printVector(const std::vector<int>& vec) {
-    for (int i = 0; i < vec.size(); ++i) {
-        std::cout << vec[i] << " ";
-    }
-    std::cout << std::endl;
-}
 
 cv::Mat varpToMat(VARP var) {
     // Assume var is already in NHWC format
     var = _Squeeze(var,{0});
     auto info = var->getInfo();
     auto ptr = var->readMap<float>();
-    printVector(info->dim);
     int height = info->dim[0];
     int width = info->dim[1];
     int channels = info->dim[2];
@@ -64,20 +62,34 @@ cv::Mat varpToMat(VARP var) {
     return norm_mat;
 }
 
-void save_picture(VARP var, bool is_batch,bool is_init) {
+void save_picture(VARP var, bool is_batch,bool is_init, int class_num) {
     // Assume the data is in NHWC format
-    var = _Convert(var, NHWC);
-    auto info = var->getInfo();
+    auto tmp = _Cast<float>(var);
+    tmp = _Convert(tmp, NHWC);
+    auto info = tmp->getInfo();
     int batch_size = info->dim[0];
-    INTS split_size = {1,1,1,1,1,1,1,1,1,1};
-    auto var_single = _Split(var, split_size, 0);
+    INTS split_size(batch_size,1);
+    auto var_single = _Split(tmp, split_size, 0);
+    std::string folderPath;
+    if (is_init){
+        folderPath = "/root/datasets/DD_datasets/real/" + std::to_string(class_num);
+        std::string command;
+        command = "mkdir -p " + folderPath;
+        system(command.c_str());
+    } else {
+        folderPath = "/root/datasets/DD_datasets/syn/" + std::to_string(class_num);
+        std::string command;
+        command = "mkdir -p " + folderPath;
+        system(command.c_str());
+    }
+    
     if (is_batch) {
         for (int i = 0; i < batch_size; ++i) {
             std::string filename;
             if (is_init){
-                filename = "vapr_init_" + std::to_string(i) + ".png";
+                filename = folderPath + "/" + std::to_string(i) + ".jpg";
             } else{
-                filename = "vapr_syn_" + std::to_string(i) + ".png";
+                filename = folderPath + "/" + std::to_string(i) + ".jpg";
             }
             cv::Mat mat = varpToMat(var_single[i]);
             
@@ -85,7 +97,7 @@ void save_picture(VARP var, bool is_batch,bool is_init) {
             std::cout << "Saved " << filename << std::endl;
         }
     } else {
-        cv::Mat mat = varpToMat(var);
+        cv::Mat mat = varpToMat(tmp);
         cv::imwrite("vapr_output.png", mat);
         std::cout << "Saved vapr_output.png" << std::endl;
     }
@@ -93,14 +105,13 @@ void save_picture(VARP var, bool is_batch,bool is_init) {
 
 
 
-void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2NoBN> model, const int numClasses, const int addToLabel,
+void DataDistillationUtils::train(std::string model_name, const int numClasses, const int addToLabel,
                                 std::string root, const int quantBits) {
     auto exe = Executor::getGlobalExecutor();
     BackendConfig config;
     exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
 
-
-
+    
 
     
     // solver->setMomentum2(0.99f);
@@ -111,7 +122,7 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
     std::cout << " dataset_size " << dataset_size << std::endl;
     const size_t batchSize  = 128;
     const size_t numWorkers = 0;
-    const int ipc = 10;
+    const int ipc = 1000;
     bool shuffle            = true;
 
     
@@ -138,7 +149,7 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
     
     VARP random_shape = _Const(shapeValue.data(), {4}, NHWC, halide_type_of<int>());
     VARPS syn_inputs;
-    auto init_method = "random";
+    auto init_method = "real";
     if(init_method == "random"){
         for (int c = 0; c < numClasses; c++){
             auto syn_input = _RandomUnifom(random_shape, halide_type_of<float>(),0.0f, 1.0f,c,c);
@@ -146,6 +157,7 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
             // syn_input->getTensor()->print();
             syn_inputs.push_back(syn_input);
             // std::cout<<syn_inputs.size()<<std::endl;
+            save_picture(syn_input,true,true,c);
         }
     }else if (init_method == "real")
     {
@@ -158,13 +170,15 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
             // syn_input->getTensor()->print();
             syn_inputs.push_back(syn_input);
             // std::cout<<syn_inputs.size()<<std::endl;
+            save_picture(syn_input,true,true,c);
         }
         
         
     }else{
         printf("unsopported init methods");
     }
-    // save_picture(syn_inputs[0],true,true);
+    
+    // return;
     std::cout << " syn " << syn_inputs.size() << std::endl;
     std::shared_ptr<Module> _input(Module::createEmpty(syn_inputs));
 
@@ -186,37 +200,68 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
     // printVector(size);
     // const int usedSize = 1000;
     // const int testIterations = usedSize / testBatchSize;
-
+    ;
     for (int epoch = 0; epoch < 1; ++epoch) {
-        model->clearCache();
+        // model->clearCache();
         exe->gc(Executor::FULL);
         {
             // AUTOTIME;
             
-            model->setIsTraining(true);
+            
             
             for (int i = 0; i < trainIterations; i++) {
                 AUTOTIME;
-                VARP loss = _Const(0.f,{1},NHWC);
-                for (uint8_t c = 0; c < numClasses; c++){
+                VARP loss = _Const(0.f,{1},NCHW);
+                std::shared_ptr<MNN::Train::Model::ConvNet> model(new ConvNet(10,1));
+                model->clearCache();
+                model->setIsTraining(true);
+                bool use_BN = true;
+                if (use_BN){
+                    VARPS real_inputs;
+                    for (uint8_t c = 0; c < numClasses; c++){
+                        
+                        trainDataLoader->select_class(c);
+                        auto example  = trainDataLoader->next(batchSize)[0];
+                        auto syn_input = syn_inputs[c];
+                        // std::cout << " 2" << std::endl;
+                        // std::cout <<example.first[0]->getInfo()->order<<std::endl;
+                        // printVector(example.first[0]->getInfo()->dim);
+                        // std::cout <<syn_input->getInfo()->order<<std::endl;
+                        auto cast1      = _Cast<float>(example.first[0]);
+                        example.first[0] = cast1 * _Const(1.0f / 255.0f);
+                        real_inputs.emplace_back(example.first[0]);
+                        // syn_input = syn_input * _Const(1.0f / 255.0f);
+                        
+                        // auto loss    = _CrossEntropy(predict, newTarget);
+                        // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
+                        // loss += torch.sum((torch.mean(output_real, dim=0) - torch.mean(output_syn, dim=0))**2)
+                        
+                    }
+                    auto real_feature = model->embedding(_Convert(_Concat(real_inputs,0), NCHW));
+                    auto syn_feature = model->embedding(_Convert(_Concat(syn_inputs,0), NCHW));
+                    loss = loss + _ReduceSum(_Square(_ReduceMean(_Reshape(real_feature, {numClasses,batchSize, -1}),{1}) - _ReduceMean(_Reshape(syn_feature, {numClasses,ipc, -1}),{1})));
+                }else {
+                    for (uint8_t c = 0; c < numClasses; c++){
                     
-                    trainDataLoader->select_class(c);
-                    auto example  = trainDataLoader->next(batchSize)[0];
-                    auto syn_input = syn_inputs[c];
-                    // std::cout << " 2" << std::endl;
-                    // std::cout <<example.first[0]->getInfo()->order<<std::endl;
-                    // printVector(example.first[0]->getInfo()->dim);
-                    // std::cout <<syn_input->getInfo()->order<<std::endl;
-                    auto cast1      = _Cast<float>(example.first[0]);
-                    example.first[0] = cast1 * _Const(1.0f / 255.0f);
-                    // syn_input = syn_input * _Const(1.0f / 255.0f);
-                    auto real_feature = model->embedding(_Convert(example.first[0], NC4HW4));
-                    auto syn_feature = model->embedding(_Convert(syn_input, NC4HW4));
-                    // auto loss    = _CrossEntropy(predict, newTarget);
-                    // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
-                    // loss += torch.sum((torch.mean(output_real, dim=0) - torch.mean(output_syn, dim=0))**2)
-                    loss = loss + _ReduceSum(_Square(_ReduceMean(real_feature,{0}) - _ReduceMean(syn_feature,{0})));
+                        trainDataLoader->select_class(c);
+                        auto example  = trainDataLoader->next(batchSize)[0];
+                        auto syn_input = syn_inputs[c];
+                        // std::cout << " 2" << std::endl;
+                        // std::cout <<example.first[0]->getInfo()->order<<std::endl;
+                        // printVector(example.first[0]->getInfo()->dim);
+                        // std::cout <<syn_input->getInfo()->order<<std::endl;
+                        auto cast1      = _Cast<float>(example.first[0]);
+                        example.first[0] = cast1 * _Const(1.0f / 255.0f);
+                        // syn_input = syn_input * _Const(1.0f / 255.0f);
+                        auto real_feature = model->embedding(_Convert(example.first[0], NCHW));
+                        auto syn_feature = model->embedding(_Convert(syn_input, NCHW));
+                        // auto loss    = _CrossEntropy(predict, newTarget);
+                        // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
+                        // loss += torch.sum((torch.mean(output_real, dim=0) - torch.mean(output_syn, dim=0))**2)
+                        loss = loss + _ReduceSum(_Square(_ReduceMean(real_feature,{0}) - _ReduceMean(syn_feature,{0})));
+                    }
                 }
+                
                 // Compute One-Hot
                 // auto newTarget = _OneHot(_Cast<int32_t>(_Squeeze(example.second[0] + _Scalar<int32_t>(addToLabel), {})),
                 //                   _Scalar<int>(numClasses), _Scalar<float>(1.0f),
@@ -234,7 +279,9 @@ void DataDistillationUtils::train(std::shared_ptr<MNN::Train::Model::MobilenetV2
                 
                 // imwrite(image_name,syn_inputs[0]);
             }
-            save_picture(syn_inputs[0],true,false);
+            for (int c = 0; c < numClasses; c++){
+                save_picture(syn_inputs[c],true,false,c);
+            }
             
         }
         // syn_inputs[0]->imwrite;

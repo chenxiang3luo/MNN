@@ -127,7 +127,7 @@ std::vector<Express::VARP> _ConvBnRelu::onForward(const std::vector<Express::VAR
 
     x = conv->forward(x);
     x = bn->forward(x);
-    x = _Relu6(x);
+    x = _Relu(x);
 
     return {x};
 }

@@ -16,12 +16,12 @@ namespace Train {
 namespace Model {
 using namespace MNN::Express;
 
-MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
+MobilenetV2::MobilenetV2(int numClasses,int img_Channel, float widthMult, int divisor) {
     int inputChannels = 32;
     int lastChannels  = 1280;
 
     std::vector<std::vector<int> > invertedResidualSetting;
-    invertedResidualSetting.push_back({1, 16, 1, 1});
+    invertedResidualSetting.push_back({inputChannels, 16, 1, 1});
     invertedResidualSetting.push_back({6, 24, 2, 2});
     invertedResidualSetting.push_back({6, 32, 3, 2});
     invertedResidualSetting.push_back({6, 64, 4, 2});
@@ -32,7 +32,7 @@ MobilenetV2::MobilenetV2(int numClasses, float widthMult, int divisor) {
     inputChannels = makeDivisible(inputChannels * widthMult, divisor);
     lastChannels  = makeDivisible(lastChannels * std::max(1.0f, widthMult), divisor);
 
-    firstConv = ConvBnRelu({3, inputChannels}, 3, 2);
+    firstConv = ConvBnRelu({img_Channel, inputChannels}, 3, 2);
 
     for (int i = 0; i < invertedResidualSetting.size(); i++) {
         std::vector<int> setting = invertedResidualSetting[i];

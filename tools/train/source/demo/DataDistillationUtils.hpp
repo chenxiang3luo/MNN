@@ -17,7 +17,7 @@
 
 class DataDistillationUtils {
 public:
-    static void train(std::shared_ptr<MNN::Train::Model::MobilenetV2NoBN> model, const int numClasses, const int addToLabel,
+    static void train(std::string model_name, const int numClasses, const int addToLabel,
                       std::string root, const int quantBits = 8);
 };
 

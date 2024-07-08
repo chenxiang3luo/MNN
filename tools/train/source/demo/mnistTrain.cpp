@@ -20,6 +20,7 @@
 #include "module/PipelineModule.hpp"
 #include "RandomGenerator.hpp"
 #include "Transformer.hpp"
+#include "ConvNet.hpp"
 
 using namespace MNN::Train;
 using namespace MNN::Express;
@@ -167,10 +168,12 @@ public:
         RandomGenerator::generator(17);
 
         std::string root = argv[1];
-        std::shared_ptr<Module> model(new Lenet);
-        if (argc >= 3) {
-            model.reset(new MnistV2);
-        }
+
+        // std::shared_ptr<Module> model(new Lenet);
+        // if (argc >= 3) {
+        //     model.reset(new MnistV2);
+        // }
+        std::shared_ptr<ConvNet> model(new ConvNet(10,1));
         train(model, root);
         return 0;
     }

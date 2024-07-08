@@ -4,7 +4,7 @@
 //
 //  Created by MNN on 2020/01/14.
 //  Copyright © 2018, Alibaba Group Holding Limited
-//
+// cd .. && cd build/ && ./runTrainDemo.out MobilenetV2Train /root/datasets/DD_datasets/real  /root/datasets/DD_datasets/dataset.txt /root/datasets/DD_datasets/real  /root/datasets/DD_datasets/dataset.txt
 
 #include <MNN/expr/Executor.hpp>
 #include <MNN/expr/Optimizer.hpp>
@@ -13,7 +13,7 @@
 #include <sstream>
 #include <vector>
 #include "DemoUnit.hpp"
-#include "MobilenetV2.hpp"
+#include "ConvNet.hpp"
 #include "MobilenetV2Utils.hpp"
 #include "NN.hpp"
 #define MNN_OPEN_TIME_TRACE
@@ -88,9 +88,9 @@ public:
         std::string testImagesFolder = argv[3];
         std::string testImagesTxt = argv[4];
 
-        std::shared_ptr<Module> model(new MobilenetV2);
+        std::shared_ptr<Module> model(new ConvNet(10,1));
 
-        MobilenetV2Utils::train(model, 1001, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
+        MobilenetV2Utils::train(model, 10, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
 
         return 0;
     }
@@ -121,7 +121,7 @@ public:
         auto outputs      = Variable::mapToSequence(inputOutputs.second);
         std::shared_ptr<Module> model(NN::extract(inputs, outputs, true));
 
-        MobilenetV2Utils::train(model, 1001, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
+        MobilenetV2Utils::train(model, 10, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
 
         return 0;
     }
@@ -164,7 +164,7 @@ public:
         std::shared_ptr<Module> model(NN::extract(inputs, outputs, true));
         NN::turnQuantize(model.get(), bits);
 
-        MobilenetV2Utils::train(model, 1001, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
+        MobilenetV2Utils::train(model, 10, 1, trainImagesFolder, trainImagesTxt, testImagesFolder, testImagesTxt);
 
         return 0;
     }

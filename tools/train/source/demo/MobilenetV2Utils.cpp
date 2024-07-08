@@ -16,6 +16,7 @@
 #include "DemoUnit.hpp"
 #include "NN.hpp"
 #include "SGD.hpp"
+#include "MnistDataset.hpp"
 #define MNN_OPEN_TIME_TRACE
 #include <MNN/AutoTime.hpp>
 #include "ADAM.hpp"
@@ -36,15 +37,15 @@ void MobilenetV2Utils::train(std::shared_ptr<Module> model, const int numClasses
                                 std::string testImagesFolder, std::string testImagesTxt, const int quantBits) {
     auto exe = Executor::getGlobalExecutor();
     BackendConfig config;
-    exe->setGlobalExecutorConfig(MNN_FORWARD_USER_1, config, 2);
+    exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 2);
     std::shared_ptr<SGD> solver(new SGD(model));
     solver->setMomentum(0.9f);
     // solver->setMomentum2(0.99f);
     solver->setWeightDecay(0.00004f);
 
     auto converImagesToFormat  = CV::RGB;
-    int resizeHeight           = 224;
-    int resizeWidth            = 224;
+    int resizeHeight           = 28;
+    int resizeWidth            = 28;
     std::vector<float> means = {127.5, 127.5, 127.5};
     std::vector<float> scales = {1/127.5, 1/127.5, 1/127.5};
     std::vector<float> cropFraction = {0.875, 0.875}; // center crop fraction for height and width
@@ -54,7 +55,7 @@ void MobilenetV2Utils::train(std::shared_ptr<Module> model, const int numClasses
     auto trainDataset = ImageDataset::create(trainImagesFolder, trainImagesTxt, datasetConfig.get(), readAllImagesToMemory);
     auto testDataset = ImageDataset::create(testImagesFolder, testImagesTxt, datasetConfig.get(), readAllImagesToMemory);
 
-    const int trainBatchSize = 32;
+    const int trainBatchSize = 128;
     const int trainNumWorkers = 4;
     const int testBatchSize = 10;
     const int testNumWorkers = 0;
@@ -65,9 +66,27 @@ void MobilenetV2Utils::train(std::shared_ptr<Module> model, const int numClasses
     const int trainIterations = trainDataLoader->iterNumber();
     const int testIterations = testDataLoader->iterNumber();
 
+     // use MnistDataset
+    // auto dataset = MnistDataset::create(trainImagesFolder, MnistDataset::Mode::TRAIN);
+    // const size_t batchSize  = 64;
+    // const size_t numWorkers = 0;
+    // bool shuffle            = true;
+    // auto trainDataLoader = std::shared_ptr<DataLoader>(dataset.createLoader(batchSize, true, shuffle, numWorkers));
+    // size_t trainIterations = trainDataLoader->iterNumber();
+    
+    // auto testDataset            = MnistDataset::create(trainImagesFolder, MnistDataset::Mode::TEST);
+    // const size_t testBatchSize  = 64;
+    // const size_t testNumWorkers = 0;
+    // shuffle                     = false;
+
+    // auto testDataLoader = std::shared_ptr<DataLoader>(testDataset.createLoader(testBatchSize, true, shuffle, testNumWorkers));
+
+    // size_t testIterations = testDataLoader->iterNumber();
+    // int epoches = 300;
+    // std::cout << " 1" << std::endl;
     // const int usedSize = 1000;
     // const int testIterations = usedSize / testBatchSize;
-
+    
     for (int epoch = 0; epoch < 50; ++epoch) {
         model->clearCache();
         exe->gc(Executor::FULL);
@@ -79,13 +98,15 @@ void MobilenetV2Utils::train(std::shared_ptr<Module> model, const int numClasses
                 AUTOTIME;
                 auto trainData  = trainDataLoader->next();
                 auto example    = trainData[0];
+                std::cout << " 1" << std::endl;
 
                 // Compute One-Hot
                 auto newTarget = _OneHot(_Cast<int32_t>(_Squeeze(example.second[0] + _Scalar<int32_t>(addToLabel), {})),
                                   _Scalar<int>(numClasses), _Scalar<float>(1.0f),
                                          _Scalar<float>(0.0f));
-
-                auto predict = model->forward(_Convert(example.first[0], NC4HW4));
+                std::cout << " 2" << std::endl;
+                auto predict = model->forward(_Convert(example.first[0], NCHW));
+                std::cout << " 2" << std::endl;
                 auto loss    = _CrossEntropy(predict, newTarget);
                 // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
                 float rate = 1e-5;
@@ -126,15 +147,15 @@ void MobilenetV2Utils::train(std::shared_ptr<Module> model, const int numClasses
         // auto accu = (float)correct / usedSize;
         std::cout << "epoch: " << epoch << "  accuracy: " << accu << std::endl;
 
-        {
-            auto forwardInput = _Input({1, 3, resizeHeight, resizeWidth}, NC4HW4);
-            forwardInput->setName("data");
-            auto predict = model->forward(forwardInput);
-            Transformer::turnModelToInfer()->onExecute({predict});
-            predict->setName("prob");
-            std::string fileName = "temp.mobilenetv2.mnn";
-            Variable::save({predict}, fileName.c_str());
-            ConvertToFullQuant::convert(fileName);
-        }
+        // {
+        //     auto forwardInput = _Input({1, 3, resizeHeight, resizeWidth}, NC4HW4);
+        //     forwardInput->setName("data");
+        //     auto predict = model->forward(forwardInput);
+        //     Transformer::turnModelToInfer()->onExecute({predict});
+        //     predict->setName("prob");
+        //     std::string fileName = "temp.mobilenetv2.mnn";
+        //     Variable::save({predict}, fileName.c_str());
+        //     ConvertToFullQuant::convert(fileName);
+        // }
     }
 }

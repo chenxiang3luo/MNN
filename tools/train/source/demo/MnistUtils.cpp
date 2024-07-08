@@ -30,11 +30,11 @@ using namespace MNN::Express;
 using namespace MNN::Train;
 
 void MnistUtils::train(std::shared_ptr<Module> model, std::string root) {
-    {
-        // Load snapshot
-        auto para = Variable::load("mnist.snapshot.mnn");
-        model->loadParameters(para);
-    }
+    // {
+    //     // Load snapshot
+    //     auto para = Variable::load("mnist.snapshot.mnn");
+    //     model->loadParameters(para);
+    // }
     auto exe = Executor::getGlobalExecutor();
     BackendConfig config;
     exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
