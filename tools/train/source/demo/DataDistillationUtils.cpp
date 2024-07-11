@@ -11,6 +11,7 @@
 #include <MNN/expr/Optimizer.hpp>
 #include <cmath>
 #include <iostream>
+#include <experimental/random>
 #include <MNN/expr/ExprCreator.hpp>
 #include <vector>
 #include "DataLoader.hpp"
@@ -80,23 +81,25 @@ VARP _AffineGrid(VARP theta, int N, int C, int H, int W) {
     return grid_transformed;
 }
 
+VARP clamp(VARP x, VARP min, VARP max) {
+        return _Maximum(_Minimum(x, max), min);
+    }
 
-
-cv::Mat clamp(const cv::Mat& src, double min_val, double max_val) {
+cv::Mat cv_clamp(const cv::Mat& src, double min_val, double max_val) {
     cv::Mat dst;
     cv::max(src, min_val, dst); // 将小于 min_val 的值设为 min_val
     cv::min(dst, max_val, dst); // 将大于 max_val 的值设为 max_val
     return dst;
 }
 
-VARP rand_scale(VARP x, float ratio) {
+VARP rand_scale(VARP x, float ratio_scale) {
     // float ratio = param.ratio_scale;
     
     std::vector<float> sx(x->getInfo()->dim[0]);
     std::vector<float> sy(x->getInfo()->dim[0]);
     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-        sx[i] = ((float)rand() / RAND_MAX) * (ratio - 1.0f/ratio) + 1.0f/ratio;
-        sy[i] = ((float)rand() / RAND_MAX) * (ratio - 1.0f/ratio) + 1.0f/ratio;
+        sx[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
+        sy[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
     }
 
     std::vector<std::vector<std::vector<float>>> theta(x->getInfo()->dim[0], std::vector<std::vector<float>>(2, std::vector<float>(3)));
@@ -121,13 +124,13 @@ VARP rand_scale(VARP x, float ratio) {
     return result;
 }
 
-VARP rand_rotate(VARP x, float ratio) {
+VARP rand_rotate(VARP x, float ratio_rotate) {
     // float ratio = param.ratio_rotate;
     // set_seed_DiffAug(param);
     
     std::vector<float> theta(x->getInfo()->dim[0]);
     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-        theta[i] = (((float)rand() / RAND_MAX) - 0.5f) * 2 * ratio / 180 * M_PI;
+        theta[i] = (((float)rand() / RAND_MAX) - 0.5f) * 2 * ratio_rotate / 180 * M_PI;
     }
 
     std::vector<std::vector<std::vector<float>>> affine(x->getInfo()->dim[0], std::vector<std::vector<float>>(2, std::vector<float>(3)));
@@ -152,7 +155,7 @@ VARP rand_rotate(VARP x, float ratio) {
     return result;
 }
 
-VARP rand_flip(VARP x, float prob) {
+VARP rand_flip(VARP x, float prob_flip) {
     // float prob = param.prob_flip;
     // set_seed_DiffAug(param);
 
@@ -168,13 +171,13 @@ VARP rand_flip(VARP x, float prob) {
     // }
 
     auto randf_var = _Const(randf.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
-    auto mask = _Greater(randf_var, _Const(prob, randf_var->getInfo()->dim, randf_var->getInfo()->order));
+    auto mask = _Greater(randf_var, _Const(prob_flip, randf_var->getInfo()->dim, randf_var->getInfo()->order));
     auto flipped_x = _Reverse(x, _Scalar<float>(3));
     auto result = _Select(mask, flipped_x, x);
     return result;
 }
 
-VARP rand_brightness(VARP x,float ratio) {
+VARP rand_brightness(VARP x,float brightness) {
     // float ratio = param.brightness;
     // set_seed_DiffAug(param);
 
@@ -190,11 +193,11 @@ VARP rand_brightness(VARP x,float ratio) {
     // }
 
     auto randb_var = _Const(randb.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
-    auto adjusted = x + (randb_var - _Scalar<float>(.5f)) * _Scalar<float>(ratio);
+    auto adjusted = x + (randb_var - _Scalar<float>(.5f)) * _Scalar<float>(brightness);
     return adjusted;
 }
 
-VARP rand_saturation(VARP x, float ratio) {
+VARP rand_saturation(VARP x, float saturation) {
     // float ratio = param.saturation;
     auto x_mean = _ReduceMean(x, {1}, true);
     // set_seed_DiffAug(param);
@@ -211,11 +214,11 @@ VARP rand_saturation(VARP x, float ratio) {
     // }
 
     auto rands_var = _Const(rands.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
-    auto adjusted = (x - x_mean) * (rands_var * _Scalar<float>(ratio)) + x_mean;
+    auto adjusted = (x - x_mean) * (rands_var * _Scalar<float>(saturation)) + x_mean;
     return adjusted;
 }
 
-VARP rand_contrast(VARP x, float ratio) {
+VARP rand_contrast(VARP x, float contrast) {
     // float ratio = param.contrast;
     auto x_mean = _ReduceMean(x, {1, 2, 3}, true);
     // set_seed_DiffAug(param);
@@ -232,59 +235,124 @@ VARP rand_contrast(VARP x, float ratio) {
     // }
 
     auto randc_var = _Const(randc.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
-    auto adjusted = (x - x_mean) * (randc_var + _Scalar<float>(ratio)) + x_mean;
+    auto adjusted = (x - x_mean) * (randc_var + _Scalar<float>(contrast)) + x_mean;
     return adjusted;
 }
 
-VARP createMeshGrid(int batch_size, int height, int width) {
-    // 创建x轴坐标
-    auto linspace_x = _LinSpace(0, _Scalar<int>(width - 1), _Scalar<int>(width));
-    auto meshgrid_x = _Tile(_Unsqueeze(linspace_x, {0}), vectorToVARP({height, 1}));
-    
-    // 创建y轴坐标
-    auto linspace_y = _LinSpace(0, _Scalar<int>(height - 1), _Scalar<int>(height));
-    auto meshgrid_y = _Tile(_Unsqueeze(linspace_y, {1}), vectorToVARP({1, width}));
-    
-    // 合并x和y坐标
-    auto grid_x = _Tile(meshgrid_x, vectorToVARP({batch_size, 1, 1}));
-    auto grid_y = _Tile(meshgrid_y, vectorToVARP({batch_size, 1, 1}));
-    auto grid = _Concat({grid_x, grid_y}, 1);  // [batch_size, 2, height, width]
-    
-    return grid;
+
+VARP rand_crop(VARP x, float ratio_crop_pad) {
+    // float ratio = param.ratio_crop_pad;
+    int shift_x = static_cast<int>(x->getInfo()->dim[2] * ratio_crop_pad + 0.5);
+    int shift_y = static_cast<int>(x->getInfo()->dim[3] * ratio_crop_pad + 0.5);
+    // set_seed_DiffAug(param);
+
+    std::vector<int> translation_x(x->getInfo()->dim[0]);
+    std::vector<int> translation_y(x->getInfo()->dim[0]);
+    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
+        translation_x[i] = rand() % (2 * shift_x + 1) - shift_x;
+        translation_y[i] = rand() % (2 * shift_y + 1) - shift_y;
+    }
+
+    // if (param.Siamese) {
+    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+    //         translation_x[i] = translation_x[0];
+    //         translation_y[i] = translation_y[0];
+    //     }
+    // }
+    int batch_size = x->getInfo()->dim[0];
+    int height = x->getInfo()->dim[2];
+    int width = x->getInfo()->dim[3];
+
+    auto translation_x_var = _Const(translation_x.data(), {x->getInfo()->dim[0], 1, 1}, NHWC, halide_type_of<int>());
+    auto translation_y_var = _Const(translation_y.data(), {x->getInfo()->dim[0], 1, 1}, NHWC, halide_type_of<int>());
+
+    std::vector<int> batch_range(batch_size);
+    std::vector<int> height_range(height);
+    std::vector<int> width_range(width);
+    std::iota(batch_range.begin(), batch_range.end(), 0);
+    std::iota(height_range.begin(), height_range.end(), 0);
+    std::iota(width_range.begin(), width_range.end(), 0);
+
+    VARP grid_batch = _Const(batch_range.data(), {batch_size, 1, 1}, NCHW, halide_type_of<int>());
+    VARP grid_x = _Const(height_range.data(), {1, height, 1}, NCHW, halide_type_of<int>());
+    VARP grid_y = _Const(width_range.data(), {1, 1, width}, NCHW, halide_type_of<int>());
+
+    grid_batch = _Tile(grid_batch, vectorToVARP({1, height, width}));
+    grid_x = _Tile(grid_x, vectorToVARP({batch_size, 1, width}));
+    grid_y = _Tile(grid_y, vectorToVARP({batch_size, height, 1}));
+
+    auto grid_x = clamp(grid_x  + translation_x_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(height + 1));
+    auto grid_y = clamp(grid_y  + translation_y_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(width + 1));
+    VARP x_pad = _Pad(x, vectorToVARP({0, 0, 1, 1, 1, 1, 0, 0}));
+    VARP x_perm = _Transpose(x_pad, {0, 2, 3, 1});
+    VARP indices = _Stack({grid_batch, grid_x, grid_y}, 3);
+    VARP selected = _GatherND(x_perm, indices);
+    VARP result = _Transpose(selected, {0, 3, 1, 2});
+
+    // auto result = x_pad->permute({0, 2, 3, 1}).index({grid[0], grid_x, grid_y}).permute({0, 3, 1, 2});
+    return selected;
 }
 
-// VARP rand_crop(VARP x, float ratio) {
-//     // float ratio = param.ratio_crop_pad;
-//     int shift_x = static_cast<int>(x->getInfo()->dim[2] * ratio + 0.5);
-//     int shift_y = static_cast<int>(x->getInfo()->dim[3] * ratio + 0.5);
-//     // set_seed_DiffAug(param);
+VARP rand_cutout(VARP x, float ratio_cutout) {
+    // 获取输入张量的信息
+    auto x_info = x->getInfo();
+    int batch_size = x_info->dim[0];
+    int height = x_info->dim[2];
+    int width = x_info->dim[3];
 
-//     std::vector<int> translation_x(x->getInfo()->dim[0]);
-//     std::vector<int> translation_y(x->getInfo()->dim[0]);
-//     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-//         translation_x[i] = rand() % (2 * shift_x + 1) - shift_x;
-//         translation_y[i] = rand() % (2 * shift_y + 1) - shift_y;
-//     }
+    // 计算cutout_size
+    int cutout_height = static_cast<int>(height * ratio_cutout + 0.5);
+    int cutout_width = static_cast<int>(width * ratio_cutout + 0.5);
 
-//     // if (param.Siamese) {
-//     //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-//     //         translation_x[i] = translation_x[0];
-//     //         translation_y[i] = translation_y[0];
-//     //     }
-//     // }
+    // 生成随机的offset_x和offset_y
+    std::vector<int> offset_x(batch_size, 0);
+    std::vector<int> offset_y(batch_size, 0);
+    for (int i = 0; i < batch_size; ++i) {
+        offset_x[i] = std::experimental::randint(0, height + (1 - cutout_height % 2));
+        offset_y[i] = std::experimental::randint(0, width + (1 - cutout_width % 2));
+    }
 
-//     auto translation_x_var = _Const(translation_x.data(), {x->getInfo()->dim[0], 1, 1}, NHWC, halide_type_of<int>());
-//     auto translation_y_var = _Const(translation_y.data(), {x->getInfo()->dim[0], 1, 1}, NHWC, halide_type_of<int>());
+    // 如果Siamese为真，设置所有offset_x和offset_y为相同的值
+    // if (Siamese) {
+    //     std::fill(offset_x.begin(), offset_x.end(), offset_x[0]);
+    //     std::fill(offset_y.begin(), offset_y.end(), offset_y[0]);
+    // }
 
-//     auto x_pad = _Pad(x, vectorToVARP({1, 1, 1, 1, 0, 0, 0, 0}));
-//     auto grid = createMeshGrid(x->getInfo()->dim[0], x->getInfo()->dim[2], x->getInfo()->dim[3]);
-//     auto grid_x = clamp(grid[1] + translation_x_var + 1, 0, x->getInfo()->dim[2] + 1);
-//     auto grid_y = clamp(grid[2] + translation_y_var + 1, 0, x->getInfo()->dim[3] + 1);
+    // 将offset_x和offset_y转换为MNN的VARP
+    VARP offset_x_var = _Const(offset_x.data(), {batch_size, 1, 1}, NCHW, halide_type_of<int>());
+    VARP offset_y_var = _Const(offset_y.data(), {batch_size, 1, 1}, NCHW, halide_type_of<int>());
 
-//     auto result = x_pad->permute({0, 2, 3, 1}).index({grid[0], grid_x, grid_y}).permute({0, 3, 1, 2});
-//     return result;
-// }
+    // 生成网格
+    std::vector<int> batch_range(batch_size);
+    std::vector<int> cutout_height_range(cutout_height);
+    std::vector<int> cutout_width_range(cutout_width);
+    std::iota(batch_range.begin(), batch_range.end(), 0);
+    std::iota(cutout_height_range.begin(), cutout_height_range.end(), 0);
+    std::iota(cutout_width_range.begin(), cutout_width_range.end(), 0);
 
+    VARP grid_batch = _Const(batch_range.data(), {batch_size, 1, 1}, NCHW, halide_type_of<int>());
+    VARP grid_x = _Const(cutout_height_range.data(), {1, cutout_height, 1}, NCHW, halide_type_of<int>());
+    VARP grid_y = _Const(cutout_width_range.data(), {1, 1, cutout_width}, NCHW, halide_type_of<int>());
+
+    grid_batch = _Tile(grid_batch, vectorToVARP({1, cutout_height, cutout_width}));
+    grid_x = _Tile(grid_x, vectorToVARP({batch_size, 1, cutout_width}));
+    grid_y = _Tile(grid_y, vectorToVARP({batch_size, cutout_height, 1}));
+
+    // 调整grid_x和grid_y
+    grid_x = clamp(grid_x + offset_x_var - _Scalar<int>(cutout_height) / _Scalar<int>(2), _Scalar<int>(0), _Scalar<int>(height - 1));
+    grid_y = clamp(grid_y + offset_y_var - _Scalar<int>(cutout_width) / _Scalar<int>(2), _Scalar<int>(0), _Scalar<int>(width - 1));
+
+    // 创建mask
+    std::vector<float> ones(batch_size * height * width, 1.0f);
+    VARP mask = _Const(ones.data(), {batch_size, height, width}, NCHW, halide_type_of<float>());
+    mask = _ScatterNd(mask, _Stack({grid_batch, grid_x, grid_y}, 3), _ZerosLike(mask));
+    mask = _Reshape(mask, {batch_size, 1, height, width});
+
+    // 将mask应用到x上
+    VARP result = x * mask;
+
+    return result;
+}
 
 void printVector(const std::vector<int>& vec) {
     for (int i = 0; i < vec.size(); ++i) {
@@ -327,7 +395,7 @@ cv::Mat varpToMat(VARP var) {
     // mat.convertTo(de_img, CV_32FC(channels), std, mean)
     // Normalize to 0-255 and convert to 8-bit unsigned
     cv::Mat norm_mat;
-    cv::normalize(clamp(de_img,0,1), norm_mat, 0, 255, cv::NORM_MINMAX);
+    cv::normalize(cv_clamp(de_img,0,1), norm_mat, 0, 255, cv::NORM_MINMAX);
     norm_mat.convertTo(norm_mat, CV_8UC(channels));
 
     return norm_mat;
@@ -382,8 +450,25 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
     BackendConfig config;
     exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
 
-    
+    std::unordered_map<std::string, std::vector<std::function<VARP(VARP, float)>>> AUGMENT_FNS = {
+        {"color", {rand_brightness, rand_saturation, rand_contrast}},
+        {"crop", {rand_crop}},
+        {"cutout", {rand_cutout}},
+        {"flip", {rand_flip}},
+        {"scale", {rand_scale}},
+        {"rotate", {rand_rotate}},
+    };
 
+    std::string strategy = "color_crop_cutout_flip_scale_rotate";
+    std::string delimiter = "_";
+
+    size_t pos = 0;
+    std::string token;
+    while ((pos = strategy.find(delimiter)) != std::string::npos) {
+        token = strategy.substr(0, pos);
+        std::cout << token << std::endl;
+        strategy.erase(0, pos + delimiter.length());
+    }
     
     // solver->setMomentum2(0.99f);
     // solver->setWeightDecay(0.00004f);
@@ -400,15 +485,11 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
     std::vector<std::vector<size_t>> indices_class(numClasses);
     std::shared_ptr<MNN::Train::MnistDataset> mmdataset = std::static_pointer_cast<MnistDataset>(dataset.mDataset);
     VARP labels = mmdataset->labels();
-    // labels->getTensor()->print();
     
     auto data = labels->readMap<uint8_t>();
-    // printVector(test1);
-    // printVector(test2);
     // // 根据标签将索引添加到 indices_class 中
     for (size_t i = 0; i < dataset_size; ++i) {
         uint8_t lab = data[i];
-        // printf("%d ", data[i]);
         indices_class[lab].push_back(i);
     }
     std::cout<<indices_class[0].size()<<std::endl;
@@ -428,9 +509,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
         for (int c = 0; c < numClasses; c++){
             auto syn_input = _RandomUnifom(random_shape, halide_type_of<float>(),0.0f, 1.0f,c,c);
             syn_input.fix(VARP::TRAINABLE);
-            // syn_input->getTensor()->print();
             syn_inputs.push_back(syn_input);
-            // std::cout<<syn_inputs.size()<<std::endl;
             save_picture(syn_input,true,true,c);
         }
     }else if (init_method == "real")
@@ -441,9 +520,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
             auto tpm = _Cast<float>(example.first[0]);
             auto syn_input = _Cast<float>(tpm);
             syn_input.fix(VARP::TRAINABLE);
-            // syn_input->getTensor()->print();
             syn_inputs.push_back(syn_input);
-            // std::cout<<syn_inputs.size()<<std::endl;
             save_picture(syn_input,true,true,c);
         }
         
@@ -463,18 +540,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
     
 
     size_t trainIterations = 10000;
-    // size_t trainIterations = trainDataLoader->iterNumber();
-    // auto testDataset            = MnistDataset::create(root, MnistDataset::Mode::TEST);
-    // const size_t testBatchSize  = 20;
-    // const size_t testNumWorkers = 0;
-    // shuffle                     = false;
 
-    // auto testDataLoader = std::shared_ptr<DataLoader>(testDataset.createLoader(testBatchSize, true, shuffle, testNumWorkers));
-
-    // printVector(size);
-    // const int usedSize = 1000;
-    // const int testIterations = usedSize / testBatchSize;
-    ;
     for (int epoch = 0; epoch < 1; ++epoch) {
         // model->clearCache();
         exe->gc(Executor::FULL);
@@ -497,23 +563,11 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                         trainDataLoader->select_class(c);
                         auto example  = trainDataLoader->next(batchSize)[0];
                         auto syn_input = syn_inputs[c];
-                        // std::cout << " 2" << std::endl;
-                        // std::cout <<example.first[0]->getInfo()->order<<std::endl;
-                        // printVector(example.first[0]->getInfo()->dim);
-                        // std::cout <<syn_input->getInfo()->order<<std::endl;
-                        // auto cast1      = _Cast<float>(example.first[0]);
-                        // example.first[0] = cast1 * _Const(1.0f / 255.0f);
                         real_inputs.emplace_back(example.first[0]);
-                        // syn_input = syn_input * _Const(1.0f / 255.0f);
-                        
-                        // auto loss    = _CrossEntropy(predict, newTarget);
-                        // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
-                        // loss += torch.sum((torch.mean(output_real, dim=0) - torch.mean(output_syn, dim=0))**2)
                         
                     }
                     auto real_feature = model->embedding(_Convert(_Concat(real_inputs,0), NCHW));
                     auto syn_feature = model->embedding(_Convert(_Concat(syn_inputs,0), NCHW));
-                    // printVector(syn_feature->getInfo()->dim);
                     loss = loss + _ReduceSum(_Square(_ReduceMean(_Reshape(real_feature, {numClasses,batchSize, -1}),{1}) - _ReduceMean(_Reshape(syn_feature, {numClasses,ipc, -1}),{1})));
                 }else {
                     for (uint8_t c = 0; c < numClasses; c++){
@@ -521,14 +575,8 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                         trainDataLoader->select_class(c);
                         auto example  = trainDataLoader->next(batchSize)[0];
                         auto syn_input = syn_inputs[c];
-                        // auto cast1      = _Cast<float>(example.first[0]);
-                        // example.first[0] = cast1 * _Const(1.0f / 255.0f);
-                        // syn_input = syn_input * _Const(1.0f / 255.0f);
                         auto real_feature = model->embedding(_Convert(example.first[0], NCHW));
                         auto syn_feature = model->embedding(_Convert(syn_input, NCHW));
-                        // auto loss    = _CrossEntropy(predict, newTarget);
-                        // float rate   = LrScheduler::inv(0.0001, solver->currentStep(), 0.0001, 0.75);
-                        // loss += torch.sum((torch.mean(output_real, dim=0) - torch.mean(output_syn, dim=0))**2)
                         loss = loss + _ReduceSum(_Square(_ReduceMean(real_feature,{0}) - _ReduceMean(syn_feature,{0})));
                     }
                 }
@@ -543,55 +591,11 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                     // std::cout << " lr: " << rate << std::endl;
                 }
                 solver->step(loss);
-                // std::cout << "order " << syn_inputs[0]->getInfo()->order<< std::endl;
-                //test
-            
-                
-                // imwrite(image_name,syn_inputs[0]);
+
             }
             
             
         }
-        // syn_inputs[0]->imwrite;
-        // int correct = 0;
-        // int sampleCount = 0;
-        // testDataLoader->reset();
-        // model->setIsTraining(false);
-        // exe->gc(Executor::PART);
 
-        // AUTOTIME;
-        // for (int i = 0; i < testIterations; i++) {
-        //     auto data       = testDataLoader->next();
-        //     auto example    = data[0];
-        //     auto predict    = model->forward(_Convert(example.first[0], NC4HW4));
-        //     predict         = _ArgMax(predict, 1); // (N, numClasses) --> (N)
-        //     auto label = _Squeeze(example.second[0]) + _Scalar<int32_t>(addToLabel);
-        //     sampleCount += label->getInfo()->size;
-        //     auto accu       = _Cast<int32_t>(_Equal(predict, label).sum({}));
-        //     correct += accu->readMap<int32_t>()[0];
-
-        //     if ((i + 1) % 10 == 0) {
-        //         std::cout << "test iteration: " << (i + 1) << " ";
-        //         std::cout << "acc: " << correct << "/" << sampleCount << " = " << float(correct) / sampleCount * 100 << "%";
-        //         std::cout << std::endl;
-        //     }
-        // }
-        // auto accu = (float)correct / testDataLoader->size();
-        // // auto accu = (float)correct / usedSize;
-        // std::cout << "epoch: " << epoch << "  accuracy: " << accu << std::endl;
-
-        // {
-        //     auto forwardInput = _Input({1, 1, 28, 28}, NC4HW4);
-        //     forwardInput->setName("data");
-        //     auto predict = model->forward(forwardInput);
-        //     Transformer::turnModelToInfer()->onExecute({predict});
-        //     predict->setName("prob");
-        //     std::string fileName = "temp.mobilenetv2.mnn";
-        //     Variable::save({predict}, fileName.c_str());
-
-        // }
     }
 }
-// def get_images(c, n): # get random n images from class c
-//             idx_shuffle = np.random.permutation(indices_class[c])[:n]
-//             return images_all[idx_shuffle]
