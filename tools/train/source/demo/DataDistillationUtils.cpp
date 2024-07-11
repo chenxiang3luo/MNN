@@ -281,8 +281,8 @@ VARP rand_crop(VARP x, float ratio_crop_pad) {
     grid_x = _Tile(grid_x, vectorToVARP({batch_size, 1, width}));
     grid_y = _Tile(grid_y, vectorToVARP({batch_size, height, 1}));
 
-    auto grid_x = clamp(grid_x  + translation_x_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(height + 1));
-    auto grid_y = clamp(grid_y  + translation_y_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(width + 1));
+    grid_x = clamp(grid_x  + translation_x_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(height + 1));
+    grid_y = clamp(grid_y  + translation_y_var + _Scalar<int>(1), _Scalar<int>(0), _Scalar<int>(width + 1));
     VARP x_pad = _Pad(x, vectorToVARP({0, 0, 1, 1, 1, 1, 0, 0}));
     VARP x_perm = _Transpose(x_pad, {0, 2, 3, 1});
     VARP indices = _Stack({grid_batch, grid_x, grid_y}, 3);
@@ -308,8 +308,11 @@ VARP rand_cutout(VARP x, float ratio_cutout) {
     std::vector<int> offset_x(batch_size, 0);
     std::vector<int> offset_y(batch_size, 0);
     for (int i = 0; i < batch_size; ++i) {
-        offset_x[i] = std::experimental::randint(0, height + (1 - cutout_height % 2));
-        offset_y[i] = std::experimental::randint(0, width + (1 - cutout_width % 2));
+        // offset_x[i] = std::experimental::randint(0, height + (1 - cutout_height % 2));
+        offset_x[i] = rand() % (height + (1 - cutout_height % 2) - 0 + 1) + 0;
+        // offset_y[i] = std::experimental::randint(0, width + (1 - cutout_width % 2));
+        offset_y[i] = rand() % (width + (1 - cutout_width % 2) - 0 + 1) + 0;
+
     }
 
     // 如果Siamese为真，设置所有offset_x和offset_y为相同的值
