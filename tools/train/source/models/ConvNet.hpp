@@ -18,7 +18,7 @@ namespace Model {
 
 class MNN_PUBLIC ConvNet : public Express::Module {
 public:
-    ConvNet(int numClass=1001,int inputChannels=1 ,int net_width=3, int net_depth=3, int im_size=28);
+    ConvNet(int numClass=1001,int inputChannels=1 ,int net_width=128, int net_depth=3, int im_size=28);
     virtual std::vector<Express::VARP> onForward(const std::vector<Express::VARP>& inputs) override;
     std::vector<Express::VARP> onEmbedding(const std::vector<Express::VARP>& inputs);
     Express::VARP embedding(Express::VARP input);

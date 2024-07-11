@@ -15,19 +15,14 @@
 
 using namespace MNN::Express;
 
-void printVector(const std::vector<int>& vec) {
-    for (int i = 0; i < vec.size(); ++i) {
-        std::cout << vec[i] << " ";
-    }
-    std::cout << std::endl;
-}
+
 
 namespace MNN {
 namespace Train {
 namespace Model {
 ConvNet::ConvNet(int numClass, int inputChannels,int net_width, int net_depth, int im_size) {
-    std::cout<<inputChannels<<std::endl;
     for (int i = 0; i < net_depth;i++){
+        
         convBlocks.emplace_back(ConvBnRelu({inputChannels, net_width}, 3, 1));
         inputChannels = net_width;
     }
