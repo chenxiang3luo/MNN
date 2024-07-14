@@ -37,14 +37,37 @@
 #include "module/PipelineModule.hpp"
 #include "MobilenetV2NoBN.hpp"
 #include "ConvNet.hpp"
-
-
 #include <random>
+
+
 using namespace MNN;
 using namespace MNN::Express;
 using namespace MNN::Train;
 using namespace MNN::CV;
 using namespace MNN::Train::Model;
+
+struct Param {
+    bool Siamese;
+    int latestseed;
+    std::string aug_mode;
+
+    Param(bool si = false, int ls = -1, const std::string& mode = "S") 
+        : Siamese(si), latestseed(ls), aug_mode(mode) {}
+
+};
+
+void printVector(const std::vector<int>& vec) {
+    for (int i = 0; i < vec.size(); ++i) {
+        std::cout << vec[i] << " ";
+    }
+    std::cout << std::endl;
+}
+
+void set_seed_DiffAug(Param& param) {
+    // Implement your seed setting function here
+    std::srand(param.latestseed);
+    param.latestseed = param.latestseed + 1;
+}
 
 VARP vectorToVARP(const std::vector<int>& vec) {
     // 获取vector的大小
@@ -56,28 +79,28 @@ VARP vectorToVARP(const std::vector<int>& vec) {
     return var;
 }
 
-VARP _AffineGrid(VARP theta, int N, int C, int H, int W) {
+VARP _AffineGrid(VARP theta, int N, int H, int W) {
     // Create normalized 2D grid
-    auto linspace_x = _LinSpace(_Scalar<int32_t>(-1), _Scalar<int32_t>(1), _Scalar<int32_t>(W));
-    auto linspace_y = _LinSpace(_Scalar<int32_t>(-1), _Scalar<int32_t>(1), _Scalar<int32_t>(H));
-
-    auto grid_x = _Tile(_Unsqueeze(linspace_x, {0}), vectorToVARP({H, 1}));
-    auto grid_y = _Tile(_Unsqueeze(linspace_y, {1}), vectorToVARP({1, W}));
+    auto linspace_x = _LinSpace(_Scalar<float>(-1.f), _Scalar<float>(1.f), _Scalar<int>(W));
+    auto linspace_y = _LinSpace(_Scalar<float>(-1.f), _Scalar<float>(1.f), _Scalar<int>(H));
+    
+    auto grid_x = _Tile(_Unsqueeze(linspace_x, {0}), vectorToVARP({H,1}));
+    auto grid_y = _Tile(_Unsqueeze(linspace_y, {1}), vectorToVARP({1,W}));
     auto grid = _Stack({grid_x, grid_y}, 2);  // [H, W, 2]
 
     // Add homogeneous coordinate
-    auto ones = _Const(1.0f, {H, W, 1}, NHWC);
+    auto ones = _Const(1.0f, {H, W, 1}, NCHW);
     grid = _Concat({grid, ones}, 2);  // [H, W, 3]
-
     // Reshape to [1, H*W, 3] and repeat N times
     grid = _Reshape(grid, {1, H * W, 3});
     grid = _Tile(grid, vectorToVARP({N, 1, 1}));  // [N, H*W, 3]
-
     // Apply affine transformation
-    auto theta_reshaped = _Reshape(theta, {N, 2, 3});  // [N, 2, 3]
-    auto grid_transformed = _BatchMatMul(theta_reshaped, grid, false, true);  // [N, 2, H*W]
+    auto theta_reshaped = _Transpose(theta, {0, 2, 1});  // [N, 3, 2]
+    auto grid_transformed = _BatchMatMul(grid, theta_reshaped, false, false);  // [N, H*W, 2]
     grid_transformed = _Reshape(grid_transformed, {N, H, W, 2});  // [N, H, W, 2]
-
+    // for (int i = 0; i< grid_transformed->getInfo()->size;i++){
+    //     std::cout<<grid_transformed->readMap<float>()[i]<<" ";
+    // }
     return grid_transformed;
 }
 
@@ -92,83 +115,103 @@ cv::Mat cv_clamp(const cv::Mat& src, double min_val, double max_val) {
     return dst;
 }
 
-VARP rand_scale(VARP x, float ratio_scale) {
-    // float ratio = param.ratio_scale;
-    
-    std::vector<float> sx(x->getInfo()->dim[0]);
-    std::vector<float> sy(x->getInfo()->dim[0]);
-    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-        sx[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
-        sy[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
-    }
-
-    std::vector<std::vector<std::vector<float>>> theta(x->getInfo()->dim[0], std::vector<std::vector<float>>(2, std::vector<float>(3)));
-    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-        theta[i][0][0] = sx[i];
-        theta[i][0][1] = 0;
-        theta[i][0][2] = 0;
-        theta[i][1][0] = 0;
-        theta[i][1][1] = sy[i];
-        theta[i][1][2] = 0;
-    }
-
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         theta[i] = theta[0];
-    //     }
-    // }
-
-    auto theta_var = _Const(theta.data(), {x->getInfo()->dim[0], 2, 3}, NHWC, halide_type_of<float>());
-    auto grid = _AffineGrid(theta_var,x->getInfo()->dim[0], x->getInfo()->dim[1], x->getInfo()->dim[2], x->getInfo()->dim[3]);
-    auto result = _GridSample(x, grid);
-    return result;
+float get_random_norm(float mean, float std){
+    std::random_device rd;  // 使用随机设备生成种子
+    std::mt19937 gen(rd());
+    std::normal_distribution<> dis(mean, std);
+    return dis(gen);
 }
 
-VARP rand_rotate(VARP x, float ratio_rotate) {
+VARP rand_scale(VARP x, Param& param) {
+    // float ratio = param.ratio_scale;
+    // std::cout<<x->getInfo()->order<<std::endl;
+    float ratio_scale = 1.2f;
+    x = _Convert(x, NC4HW4);
+    std::vector<float> sx(x->getInfo()->dim[0]);
+    std::vector<float> sy(x->getInfo()->dim[0]);
+    set_seed_DiffAug(param);
+    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
+        sx[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
+    }
+    set_seed_DiffAug(param);
+    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
+        sy[i] = ((float)rand() / RAND_MAX) * (ratio_scale - 1.0f/ratio_scale) + 1.0f/ratio_scale;
+    }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            sx[i] = sx[0];
+            sy[i] = sy[0];
+        }
+    }
+    // auto theta = create3DMatrix(x->getInfo()->dim[0],2,3);
+    std::vector<float> theta(x->getInfo()->dim[0]*6);
+    for (int i = 0; i < x->getInfo()->dim[0]; i = i+6) {
+        theta[i] = sx[i];
+        theta[i+1] = 0.f;
+        theta[i+2] = 0.f;
+        theta[i+3] = 0.f;
+        theta[i+4] = sy[i];
+        theta[i+5] = 0.f;
+    }
+    
+    auto theta_var = _Const(theta.data(), {x->getInfo()->dim[0], 2, 3}, NCHW, halide_type_of<float>());
+    // for (int i = 0; i< theta_var->getInfo()->size;i++){
+    //     std::cout<<theta_var->readMap<float>()[i]<<" ";
+    // }
+    auto grid = _AffineGrid(theta_var,x->getInfo()->dim[0], x->getInfo()->dim[2], x->getInfo()->dim[3]);
+    x = _GridSample(x, grid,MNN::Express::BILINEAR,MNN::Express::GRID_SAMPLE_PADDING_BORDER);
+    return x;
+}
+
+
+
+
+VARP rand_rotate(VARP x, Param& param) {
+    float ratio_rotate = 1.f;
     // float ratio = param.ratio_rotate;
     // set_seed_DiffAug(param);
-    
+    x = _Convert(x, NC4HW4);
     std::vector<float> theta(x->getInfo()->dim[0]);
     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
         theta[i] = (((float)rand() / RAND_MAX) - 0.5f) * 2 * ratio_rotate / 180 * M_PI;
     }
 
-    std::vector<std::vector<std::vector<float>>> affine(x->getInfo()->dim[0], std::vector<std::vector<float>>(2, std::vector<float>(3)));
-    for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
-        affine[i][0][0] = cos(theta[i]);
-        affine[i][0][1] = -sin(theta[i]);
-        affine[i][0][2] = 0;
-        affine[i][1][0] = sin(theta[i]);
-        affine[i][1][1] = cos(theta[i]);
-        affine[i][1][2] = 0;
+    std::vector<float> affine(x->getInfo()->dim[0]*6);
+    for (int i = 0; i < x->getInfo()->dim[0]; i = i+6) {
+        affine[i] = cos(theta[i]);
+        affine[i+1] = -sin(theta[i]);
+        affine[i+2] = 0.f;
+        affine[i+3] = sin(theta[i]);
+        affine[i+4] = cos(theta[i]);
+        affine[i+5] = 0.f;
     }
 
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         affine[i] = affine[0];
-    //     }
-    // }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            affine[i] = affine[0];
+        }
+    }
 
     auto affine_var = _Const(affine.data(), {x->getInfo()->dim[0], 2, 3}, NHWC, halide_type_of<float>());
-    auto grid = _AffineGrid(affine_var,x->getInfo()->dim[0], x->getInfo()->dim[1], x->getInfo()->dim[2], x->getInfo()->dim[3]);
+    auto grid = _AffineGrid(affine_var,x->getInfo()->dim[0], x->getInfo()->dim[2], x->getInfo()->dim[3]);
     auto result = _GridSample(x, grid);
     return result;
 }
 
-VARP rand_flip(VARP x, float prob_flip) {
+VARP rand_flip(VARP x, Param& param) {
     // float prob = param.prob_flip;
     // set_seed_DiffAug(param);
-
+    float prob_flip = 1;
     std::vector<float> randf(x->getInfo()->dim[0]);
     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
         randf[i] = (float)rand() / RAND_MAX;
     }
 
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         randf[i] = randf[0];
-    //     }
-    // }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            randf[i] = randf[0];
+        }
+    }
 
     auto randf_var = _Const(randf.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
     auto mask = _Greater(randf_var, _Const(prob_flip, randf_var->getInfo()->dim, randf_var->getInfo()->order));
@@ -177,28 +220,29 @@ VARP rand_flip(VARP x, float prob_flip) {
     return result;
 }
 
-VARP rand_brightness(VARP x,float brightness) {
+VARP rand_brightness(VARP x,Param& param) {
     // float ratio = param.brightness;
     // set_seed_DiffAug(param);
-
+    float brightness = 1;
     std::vector<float> randb(x->getInfo()->dim[0]);
     for (int i = 0; i < x->getInfo()->dim[0]; ++i) {
         randb[i] = (float)rand() / RAND_MAX;
     }
 
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         randb[i] = randb[0];
-    //     }
-    // }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            randb[i] = randb[0];
+        }
+    }
 
     auto randb_var = _Const(randb.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
     auto adjusted = x + (randb_var - _Scalar<float>(.5f)) * _Scalar<float>(brightness);
     return adjusted;
 }
 
-VARP rand_saturation(VARP x, float saturation) {
+VARP rand_saturation(VARP x, Param& param) {
     // float ratio = param.saturation;
+    float saturation = 1;
     auto x_mean = _ReduceMean(x, {1}, true);
     // set_seed_DiffAug(param);
 
@@ -207,19 +251,20 @@ VARP rand_saturation(VARP x, float saturation) {
         rands[i] = (float)rand() / RAND_MAX;
     }
 
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         rands[i] = rands[0];
-    //     }
-    // }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            rands[i] = rands[0];
+        }
+    }
 
     auto rands_var = _Const(rands.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
     auto adjusted = (x - x_mean) * (rands_var * _Scalar<float>(saturation)) + x_mean;
     return adjusted;
 }
 
-VARP rand_contrast(VARP x, float contrast) {
+VARP rand_contrast(VARP x, Param& param) {
     // float ratio = param.contrast;
+    float contrast = 1;
     auto x_mean = _ReduceMean(x, {1, 2, 3}, true);
     // set_seed_DiffAug(param);
 
@@ -228,11 +273,11 @@ VARP rand_contrast(VARP x, float contrast) {
         randc[i] = (float)rand() / RAND_MAX;
     }
 
-    // if (param.Siamese) {
-    //     for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
-    //         randc[i] = randc[0];
-    //     }
-    // }
+    if (param.Siamese) {
+        for (int i = 1; i < x->getInfo()->dim[0]; ++i) {
+            randc[i] = randc[0];
+        }
+    }
 
     auto randc_var = _Const(randc.data(), {x->getInfo()->dim[0], 1, 1, 1}, NHWC, halide_type_of<float>());
     auto adjusted = (x - x_mean) * (randc_var + _Scalar<float>(contrast)) + x_mean;
@@ -240,8 +285,9 @@ VARP rand_contrast(VARP x, float contrast) {
 }
 
 
-VARP rand_crop(VARP x, float ratio_crop_pad) {
+VARP rand_crop(VARP x, Param& param) {
     // float ratio = param.ratio_crop_pad;
+    float ratio_crop_pad = 0;
     int shift_x = static_cast<int>(x->getInfo()->dim[2] * ratio_crop_pad + 0.5);
     int shift_y = static_cast<int>(x->getInfo()->dim[3] * ratio_crop_pad + 0.5);
     // set_seed_DiffAug(param);
@@ -293,8 +339,9 @@ VARP rand_crop(VARP x, float ratio_crop_pad) {
     return selected;
 }
 
-VARP rand_cutout(VARP x, float ratio_cutout) {
+VARP rand_cutout(VARP x, Param& param ) {
     // 获取输入张量的信息
+    float ratio_cutout = 0;
     auto x_info = x->getInfo();
     int batch_size = x_info->dim[0];
     int height = x_info->dim[2];
@@ -357,12 +404,7 @@ VARP rand_cutout(VARP x, float ratio_cutout) {
     return result;
 }
 
-void printVector(const std::vector<int>& vec) {
-    for (int i = 0; i < vec.size(); ++i) {
-        std::cout << vec[i] << " ";
-    }
-    std::cout << std::endl;
-}
+
 
 Example mnistTransform(Example example) {
         // // an easier way to do this
@@ -447,13 +489,8 @@ void save_picture(VARP var, bool is_batch,bool is_init, int class_num) {
 
 
 
-void DataDistillationUtils::train(std::string model_name, const int numClasses, const int addToLabel,
-                                std::string root, const int quantBits) {
-    auto exe = Executor::getGlobalExecutor();
-    BackendConfig config;
-    exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
 
-    std::unordered_map<std::string, std::vector<std::function<VARP(VARP, float)>>> AUGMENT_FNS = {
+std::unordered_map<std::string, std::vector<std::function<VARP(VARP, Param&)>>> AUGMENT_FNS = {
         {"color", {rand_brightness, rand_saturation, rand_contrast}},
         {"crop", {rand_crop}},
         {"cutout", {rand_cutout}},
@@ -462,19 +499,48 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
         {"rotate", {rand_rotate}},
     };
 
-    std::string strategy = "color_crop_cutout_flip_scale_rotate";
-    std::string delimiter = "_";
+
+
+
+
+MNN::Express::VARP DiffAugment(MNN::Express::VARP x, std::vector<std::string> strategys, int seed, Param& param) {
+    // if (strategy == "None" || strategy == "none" || strategy.empty()) {
+    //     return x;
+    // }
+
+    if (seed == -1) {
+        param.Siamese = false;
+    } else {
+        param.Siamese = true;
+    }
+
+    param.latestseed = seed;
 
     size_t pos = 0;
-    std::string token;
-    while ((pos = strategy.find(delimiter)) != std::string::npos) {
-        token = strategy.substr(0, pos);
-        std::cout << token << std::endl;
-        strategy.erase(0, pos + delimiter.length());
-    }
-    
-    // solver->setMomentum2(0.99f);
-    // solver->setWeightDecay(0.00004f);
+
+    set_seed_DiffAug(param);
+    // std::random_device rd;
+    // std::mt19937 gen(rd());
+    // std::uniform_int_distribution<> dis(0, strategys.size() - 1);
+    // auto p = strategys[dis(gen)];
+    // for (const auto& f : AUGMENT_FNS[p]) {
+    //     std::function<VARP(VARP, float)> aug = AUGMENT_FNS["scale"][0];
+    //     x = aug(x, 1.2);
+    // }
+    std::function<VARP(VARP, Param&)> aug = AUGMENT_FNS["scale"][0];
+    x = aug(x, param);
+        // Assuming MNN::Tensor has a contiguous method, if not, implement accordingly.
+        // x = x->contiguous();
+    return x;
+}
+
+void DataDistillationUtils::train(std::string model_name, const int numClasses, const int addToLabel,
+                                std::string root, const int quantBits) {
+    auto exe = Executor::getGlobalExecutor();
+    BackendConfig config;
+    exe->setGlobalExecutorConfig(MNN_FORWARD_CPU, config, 4);
+    // // solver->setMomentum2(0.99f);
+    // // solver->setWeightDecay(0.00004f);
 
     auto dataset = MnistDataset::create(root, MnistDataset::Mode::TRAIN);
     size_t dataset_size = dataset.mDataset->size();
@@ -526,13 +592,29 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
             syn_inputs.push_back(syn_input);
             save_picture(syn_input,true,true,c);
         }
-        
-        
     }else{
         printf("unsopported init methods");
     }
-    
-    // return;
+
+    std::string strategy = "color_crop_cutout_flip_scale_rotate";
+    std::string delimiter = "_";
+
+    size_t pos = 0;
+    std::vector<std::string> strategys; 
+    while ((pos = strategy.find(delimiter)) != std::string::npos) {
+        auto token = strategy.substr(0, pos);
+        std::cout<<token<<std::endl;
+        strategys.emplace_back(token);
+        strategy.erase(0, pos + delimiter.length());
+    }
+    // auto p = rand() % strategys.size();
+    // Param param(false, -1, "S");
+    // int seed = 1234;
+    // auto temp1 = DiffAugment(syn_inputs[4],strategys,seed,param);
+    // auto temp2 = DiffAugment(syn_inputs[4],strategys,seed,param);
+    // save_picture(temp1,true,false,4);
+    // save_picture(temp2,true,false,5);
+    // // return;
     std::cout << " syn " << syn_inputs.size() << std::endl;
     std::shared_ptr<Module> _input(Module::createEmpty(syn_inputs));
 
@@ -540,8 +622,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
     solver->setMomentum(0.5f);
     solver->setLearningRate(1.f);
     // the stack transform, stack [1, 28, 28] to [n, 1, 28, 28]
-    
-
+    Param param(false, -1, "S");
     size_t trainIterations = 10000;
 
     for (int epoch = 0; epoch < 1; ++epoch) {
@@ -560,17 +641,25 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                 model->setIsTraining(true);
                 bool use_BN = true;
                 if (use_BN){
-                    VARPS real_inputs;
+                    VARPS real_inputs_all;
+                    VARPS syn_inputs_all;
                     for (uint8_t c = 0; c < numClasses; c++){
                         
                         trainDataLoader->select_class(c);
                         auto example  = trainDataLoader->next(batchSize)[0];
                         auto syn_input = syn_inputs[c];
-                        real_inputs.emplace_back(example.first[0]);
+                        srand(time(NULL));
+                        int seed = rand() % 100000;
+                        // syn_input = syn_input;
+                        // example.first[0] = example.first[0];
+                        syn_input = DiffAugment(syn_input,strategys,seed,param);
+                        example.first[0] = DiffAugment(example.first[0],strategys,seed,param);
+                        real_inputs_all.emplace_back(example.first[0]);
+                        syn_inputs_all.emplace_back(syn_input);
                         
                     }
-                    auto real_feature = model->embedding(_Convert(_Concat(real_inputs,0), NCHW));
-                    auto syn_feature = model->embedding(_Convert(_Concat(syn_inputs,0), NCHW));
+                    auto real_feature = model->embedding(_Convert(_Concat(real_inputs_all,0), NCHW));
+                    auto syn_feature = model->embedding(_Convert(_Concat(syn_inputs_all,0), NCHW));
                     loss = loss + _ReduceSum(_Square(_ReduceMean(_Reshape(real_feature, {numClasses,batchSize, -1}),{1}) - _ReduceMean(_Reshape(syn_feature, {numClasses,ipc, -1}),{1})));
                 }else {
                     for (uint8_t c = 0; c < numClasses; c++){
@@ -585,7 +674,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                 }
                 
 
-                if (solver->currentStep() % 50 == 0) {
+                if (solver->currentStep() % 10 == 0) {
                     std::cout << "train iteration: " << solver->currentStep();
                     std::cout << " loss: " << loss->readMap<float>()[0];
                     for (int c = 0; c < numClasses; c++){
@@ -594,11 +683,7 @@ void DataDistillationUtils::train(std::string model_name, const int numClasses, 
                     // std::cout << " lr: " << rate << std::endl;
                 }
                 solver->step(loss);
-
             }
-            
-            
         }
-
     }
 }
